@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="author" content="James Howard">
+    <title>WebRTC Audio Latency</title>
+    <style>
+        html, body {
+            font-family: -apple-system;
+        }
+        video {
+            background-color: black;
+        }
+        table, th, td {
+            border: 0;
+        }
+        #log {
+            border: 1px solid #999;
+            padding: 4px;
+            font-family: ui-monospace;
+            font-size: 11px;
+            overflow-y: scroll;
+            height: 400px;
+            white-space: pre;
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <button id="connect">Connect</button>
+    </div>
+    
+    <audio id="remote" controls></audio>
+    
+    <p>Log:</p>
+    <div id="log"></div>
+    
+<script language="javascript">
+function pageLog(msg) {
+    const log = document.getElementById('log');
+    log.textContent += msg + '\n';
+    log.scrollTop = log.scrollHeight;
+}
+
+async function connect() {    
+    const srcAudioContext = new AudioContext();
+    const srcDest = srcAudioContext.createMediaStreamDestination(); 
+    
+    const oscillator = srcAudioContext.createOscillator();
+    const gain = srcAudioContext.createGain();
+    gain.gain.value = 0.0;
+    oscillator.connect(gain);
+    gain.connect(srcDest);
+    oscillator.start(0);
+    
+    const stream = srcDest.stream;
+    console.log("Create stream", stream);
+    
+    const state = {
+        start: new Date(),
+        lastSent: new Date(),
+        lastReceived: new Date(),
+        oscillator,
+        gain
+    };
+    
+    const senderPeer = new RTCPeerConnection();
+    const tracks = stream.getTracks().forEach(track => senderPeer.addTrack(track, stream));
+    senderPeer.addTransceiver('audio', {'direction': 'sendonly'});
+    const offer = await senderPeer.createOffer();
+    console.log('Created offer', offer);
+    await senderPeer.setLocalDescription(offer);
+    
+    const receiverPeer = new RTCPeerConnection();
+    receiverPeer.addTransceiver('audio', {'direction': 'recvonly'});
+    receiverPeer.addEventListener('track', evt => {
+        let audio = document.getElementById('remote');
+        console.log('Received track evt', evt);
+        const s = evt.streams[0];
+        if (s && audio.srcObject !== s) {
+            console.log('Received remote stream', s);
+            state.receiver = evt.receiver;
+            state.stream = s;
+            audio.srcObject = s;
+//             audio.play();
+            
+            pageLog('connected. click play button to hear audio.');
+            
+            playTones(state);
+            readTones(state);
+        }
+    });
+    await receiverPeer.setRemoteDescription(senderPeer.localDescription);
+    const answer = await receiverPeer.createAnswer();
+    await receiverPeer.setLocalDescription(answer);
+    await senderPeer.setRemoteDescription(receiverPeer.localDescription);  
+}
+
+function playTones(state) {
+    setInterval(() => {
+        state.lastSent = new Date();
+        state.gain.gain.setValueAtTime(1.0, state.gain.context.currentTime);
+        state.gain.gain.setValueAtTime(0.0, state.gain.context.currentTime + 0.2);
+        const dt = state.lastSent - state.start;
+        pageLog(`${dt} playTone`);
+
+    }, 2 * 1000);
+}
+
+function readTones(state) {
+    setInterval(() =>  {
+        if (state.lastSent > state.lastReceived) {
+            const src = state.receiver.getSynchronizationSources()[0];
+            if (src && src.audioLevel > 0.5) {
+                state.lastReceived = new Date();
+                const latency = state.lastReceived - state.lastSent;
+                const dt = state.lastReceived - state.start;
+                pageLog(`${dt} read tone with latency ${latency}`);
+            }
+        }
+    }, 1);
+}
+
+document.getElementById('connect').addEventListener('click', async evt => {
+    evt.target.disabled = true;
+    connect();
+});
+
+</script>
+</body>
+</html>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="author" content="James Howard">
+    <title>WebRTC Audio Latency</title>
+    <style>
+        html, body {
+            font-family: -apple-system;
+        }
+        video {
+            background-color: black;
+        }
+        table, th, td {
+            border: 0;
+        }
+        #log {
+            border: 1px solid #999;
+            padding: 4px;
+            font-family: ui-monospace;
+            font-size: 11px;
+            overflow-y: scroll;
+            height: 200px;
+            white-space: pre;
+        }
+    </style>
+</head>
+<body>
+    <div id="sender" style="display: none;">
+        <p>
+            Offer:
+            <input type="text" id="offer1"><button id="copyOffer1">Copy</button>
+        </p>
+        <p>
+            Answer:
+            <input type="text" id="answer1"><button id="pasteAnswer1">Paste</button>
+        </p>
+        <div>
+            <button id="tone">Send Tone</button>
+        </div>
+    </div>
+    <div id="receiver" style="display: none;">
+        <p>
+            Offer:
+            <input type="text" id="offer2"><button id="pasteOffer2">Paste</button>
+        </p>
+        <p>
+            Answer:
+            <input type="text" id="answer2"><button id="copyAnswer2">Copy</button>
+        </p>
+        <div>
+            <p>Received audio:</p>
+            <audio id="remote" controls></audio>
+        </div>
+    </div>
+
+    <div id="modes">
+        <button id="startSender">Be Sender</button>
+        <button id="startReceiver">Be Receiver</button>
+    </div>
+    
+    <p>
+        This page measures round trip audio latency.
+    <p>
+    
+    <p>
+        <ol>
+            <li>Setup and Signaling
+            <ol>
+                <li>Open this page and click the "Be Sender" button.</li>
+                <li>Open this page in a second window or a separate device and click/tap the "Be Receiver" button.</li>
+                <li>From the sender side, copy the offer text and paste it into the receiver offer form.
+                    <ul>
+                        <li><i>Tip: Use Universal Clipboard to copy to iOS device</i></li>
+                    </ul>
+                </li>
+                <li>From the receiver side, quickly copy the answer text and paste it into the sender answer form.</li>
+                <li>Once the connection is established, click send "Send Tone" from the sender side and observe audio latency at the receiver side.</li>
+            </ol>
+            </li>
+        </ol>
+    </p>
+    
+    <p>Log:</p>
+    <div id="log"></div>
+    
+<script language="javascript">
+function pageLog(msg) {
+    const log = document.getElementById('log');
+    log.textContent += msg + '\n';
+    log.scrollTop = log.scrollHeight;
+}
+
+async function sender() {
+    document.getElementById('sender').style.display = '';
+    document.getElementById('modes').style.display = 'none';
+    
+    const audioContext = new AudioContext();
+    const dest = audioContext.createMediaStreamDestination(); 
+    
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    gain.gain.value = 1.0;
+    oscillator.connect(gain);
+    gain.connect(dest);
+    oscillator.start(0);
+    
+    const stream = dest.stream;
+    
+    const peer = new RTCPeerConnection();
+    const track = stream.getAudioTracks()[0];
+    peer.addTrack(track, stream);
+    peer.addTransceiver('audio', {'direction': 'sendonly'});    
+    const offer = await peer.createOffer();
+    console.log('Created offer', peer);
+    await peer.setLocalDescription(offer);
+    document.getElementById('offer1').value = JSON.stringify(peer.localDescription);
+
+    document.getElementById('copyOffer1').addEventListener('click', evt => {
+        navigator.clipboard.writeText(document.getElementById('offer1').value);
+    });
+    
+    async function handleAnswer(answerText) {
+        if (peer.signalingState != "have-local-offer") return;
+        const answer = new RTCSessionDescription(JSON.parse(answerText));
+        console.log('handleAnswer', answer);
+        try {
+            await peer.setRemoteDescription(answer);
+        } catch (e) {
+            console.error('setRemoteDescription', e);
+        }
+    }
+    
+    document.getElementById('answer1').addEventListener('change', evt => {
+        handleAnswer(evt.target.value);
+    });
+    
+    document.getElementById('pasteAnswer1').addEventListener('click', async evt => {
+        const text = await navigator.clipboard.readText();
+        document.getElementById('answer1').value = text;
+        handleAnswer(text);
+    });
+    
+    document.getElementById('tone').addEventListener('click', evt => {
+        pageLog("Send Tone");
+        gain.gain.setValueAtTime(1.0, audioContext.currentTime);
+        gain.gain.setValueAtTime(0.0, audioContext.currentTime + 0.2);
+    });
+}
+
+function listen(receiver) {
+    // poll for incoming audio
+    pageLog("listening ...");
+    let state = {
+        hi: false,
+    };
+    let _listen = () => {
+        let src = receiver.getSynchronizationSources()[0];
+        if (src && src.audioLevel > 0.5 && !state.hi) {
+            state.hi = true;
+            pageLog(`Tone High`);
+        } else if (src && src.audioLevel < 0.1 && state.hi) {
+            state.hi = false;
+            pageLog(`Tone Low`);
+        }
+    };
+    setInterval(_listen, 10);
+}
+
+async function receiver() {
+    document.getElementById('receiver').style.display = '';
+    document.getElementById('modes').style.display = 'none';
+    
+    const peer = new RTCPeerConnection();
+    peer.addTransceiver('audio', {'direction': 'recvonly'});    
+    peer.addEventListener('track', evt => {
+        let audio = document.getElementById('remote');
+        console.log('Received track evt', evt);
+        let stream = evt.streams[0];
+        if (stream && audio.srcObject !== stream) {
+            console.log('Received remote stream', stream);
+            audio.srcObject = stream;
+            // user must click play themselves to hear
+            // audio.play();
+            
+            pageLog('Connected audio. Click play to hear.');
+            
+//             let receiver = evt.receiver;
+//             listen(receiver);
+        }
+    });
+            
+    async function handleOffer(offer) {
+        await peer.setRemoteDescription(new RTCSessionDescription(JSON.parse(offer)));
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        answer2.value = JSON.stringify(peer.localDescription);
+        answer2.select();
+    }
+    
+    document.getElementById('offer2').addEventListener('change', async (evt) => {
+        console.log('offer2 changed');
+        const offerText = evt.target.value;
+        handleOffer(offerText);
+    });
+    
+    document.getElementById('pasteOffer2').addEventListener('click', async evt => {
+        let text = await navigator.clipboard.readText();        
+        document.getElementById('offer2').value = text;
+        handleOffer(text);
+    });
+    
+    document.getElementById('copyAnswer2').addEventListener('click', async (evt) => {
+        navigator.clipboard.writeText(document.getElementById('answer2').value);
+    });
+}
+
+document.getElementById('startSender').addEventListener('click', sender);
+document.getElementById('startReceiver').addEventListener('click', receiver);
+
+</script>
+</body>
+</html>
