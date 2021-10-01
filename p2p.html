@@ -114,14 +114,18 @@ async function sender() {
     const offer = await peer.createOffer();
     console.log('Created offer', peer);
     await peer.setLocalDescription(offer);
-    document.getElementById('offer1').value = JSON.stringify(peer.localDescription);
+    peer.onicecandidate = ({candidate}) => {
+        if (candidate) return;
+        const offer = document.getElementById('offer1');
+        offer.value = JSON.stringify(peer.localDescription);
+        offer.select();
+    };
 
     document.getElementById('copyOffer1').addEventListener('click', evt => {
         navigator.clipboard.writeText(document.getElementById('offer1').value);
     });
     
     async function handleAnswer(answerText) {
-        if (peer.signalingState != "have-local-offer") return;
         const answer = new RTCSessionDescription(JSON.parse(answerText));
         console.log('handleAnswer', answer);
         try {
@@ -185,8 +189,8 @@ async function receiver() {
             
             pageLog('Connected audio. Click play to hear.');
             
-//             let receiver = evt.receiver;
-//             listen(receiver);
+            const receiver = evt.receiver;
+            listen(receiver);
         }
     });
             
@@ -194,8 +198,13 @@ async function receiver() {
         await peer.setRemoteDescription(new RTCSessionDescription(JSON.parse(offer)));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
-        answer2.value = JSON.stringify(peer.localDescription);
-        answer2.select();
+        const answer2 = document.getElementById('answer2');
+        peer.onicecandidate = ({candidate}) => {
+            if (candidate) return;
+            answer2.focus();
+            answer2.value = JSON.stringify(peer.localDescription);
+            answer2.select();
+        };
     }
     
     document.getElementById('offer2').addEventListener('change', async (evt) => {
